@@ -21,7 +21,7 @@ import (
 func main() {
 	flag.Parse()
 
-	cfg := &packages.Config{Mode: packages.NeedFiles | packages.NeedSyntax}
+	cfg := &packages.Config{Mode: packages.NeedFiles | packages.NeedSyntax | packages.NeedImports}
 	pkgs, err := packages.Load(cfg, flag.Args()...)
 	if err != nil {
 		log.Fatalf("load: %v\n", err)
@@ -65,15 +65,26 @@ func main() {
 		})
 
 		for _, f := range pkg.GoFiles {
-			file, err := findFile(dg, f)
+			uid, err := findFile(dg, f)
 			if err != nil {
-				log.Printf("couldn't find file for %s: %v", f, err)
-				log.Fatal(err)
+				log.Fatalf("couldn't find file for %s: %v", f, err)
 			}
 			nquads = append(nquads, &api.NQuad{
 				Subject:   "uid(pkg)",
 				Predicate: "go-files",
-				ObjectId:  file,
+				ObjectId:  uid,
+			})
+		}
+
+		for _, pkg := range pkg.Imports {
+			uid, err := findPackage(dg, pkg.ID)
+			if err != nil {
+				log.Fatalf("couldn't find package for %s: %v", pkg.ID, err)
+			}
+			nquads = append(nquads, &api.NQuad{
+				Subject:   "uid(pkg)",
+				Predicate: "imports",
+				ObjectId:  uid,
 			})
 		}
 
@@ -128,6 +139,41 @@ func findFile(dg *dgo.Dgraph, path string) (string, error) {
 	})
 	if err != nil {
 		return "", errors.Wrap(err, "could not create new file")
+	}
+	return res.Uids["f"], nil
+}
+
+func findPackage(dg *dgo.Dgraph, id string) (string, error) {
+	ctx := context.Background()
+
+	txn := dg.NewTxn()
+	defer txn.Commit(ctx)
+
+	res, err := txn.Query(ctx, fmt.Sprintf(`{q(func: eq(id, %q)) {uid}}`, id))
+	if err != nil {
+		return "", errors.Wrap(err, "could not query for package id")
+	}
+
+	var data struct{ Q []struct{ UID string } }
+	if err := json.Unmarshal(res.GetJson(), &data); err != nil {
+		return "", errors.Wrap(err, "could not parse response")
+	}
+
+	if len(data.Q) > 0 {
+		return data.Q[0].UID, nil
+	}
+
+	res, err = txn.Mutate(ctx, &api.Mutation{
+		Set: []*api.NQuad{
+			{
+				Subject:     "_:f",
+				Predicate:   "path",
+				ObjectValue: &api.Value{Val: &api.Value_StrVal{StrVal: id}},
+			},
+		},
+	})
+	if err != nil {
+		return "", errors.Wrap(err, "could not create new package")
 	}
 	return res.Uids["f"], nil
 }
