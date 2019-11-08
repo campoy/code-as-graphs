@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"os"
 
 	"github.com/dgraph-io/dgo/v2"
 	"github.com/dgraph-io/dgo/v2/protos/api"
@@ -21,13 +20,13 @@ import (
 func main() {
 	flag.Parse()
 
-	cfg := &packages.Config{Mode: packages.NeedFiles | packages.NeedSyntax | packages.NeedImports}
+	cfg := &packages.Config{Mode: packages.NeedFiles | packages.NeedImports}
 	pkgs, err := packages.Load(cfg, flag.Args()...)
 	if err != nil {
 		log.Fatalf("load: %v\n", err)
 	}
 	if packages.PrintErrors(pkgs) > 0 {
-		os.Exit(1)
+		log.Printf("some errors found, but continuing")
 	}
 
 	conn, err := grpc.Dial("localhost:9080", grpc.WithInsecure())
@@ -44,8 +43,21 @@ func main() {
 	if err := dg.Alter(ctx, &api.Operation{
 		Schema: `
 			<id>: string @index(exact) .
-			<go-files>: [uid] .
+			<go-files>: [uid] @reverse .
 			<path>: string @index(hash) .
+			<imports>: [uid] @reverse .
+
+			type Package {
+				id: string
+				imports: [Package]
+				<~imports>: [Pacakge]
+				go-files: [File]
+			}
+
+			type File {
+				path: string
+				<~go-files>: Package
+			}
 		`,
 	}); err != nil {
 		log.Fatal(err)
@@ -64,8 +76,16 @@ func main() {
 			},
 		})
 
+		nquads = append(nquads, &api.NQuad{
+			Subject:   "uid(pkg)",
+			Predicate: "dgraph.type",
+			ObjectValue: &api.Value{
+				Val: &api.Value_StrVal{StrVal: "Package"},
+			},
+		})
+
 		for _, f := range pkg.GoFiles {
-			uid, err := findFile(dg, f)
+			uid, err := upsert(dg, "path", f, "File")
 			if err != nil {
 				log.Fatalf("couldn't find file for %s: %v", f, err)
 			}
@@ -77,7 +97,7 @@ func main() {
 		}
 
 		for _, pkg := range pkg.Imports {
-			uid, err := findPackage(dg, pkg.ID)
+			uid, err := upsert(dg, "id", pkg.ID, "Package")
 			if err != nil {
 				log.Fatalf("couldn't find package for %s: %v", pkg.ID, err)
 			}
@@ -103,20 +123,18 @@ func main() {
 			log.Fatalf("couldn't do stuff: %v", err)
 		}
 		fmt.Printf("%s", res.GetJson())
-
 	}
-
 }
 
-func findFile(dg *dgo.Dgraph, path string) (string, error) {
+func upsert(dg *dgo.Dgraph, pred, val, typeName string) (string, error) {
 	ctx := context.Background()
 
 	txn := dg.NewTxn()
 	defer txn.Commit(ctx)
 
-	res, err := txn.Query(ctx, fmt.Sprintf(`{q(func: eq(path, %q)) {uid}}`, path))
+	res, err := txn.Query(ctx, fmt.Sprintf(`{q(func: eq(%s, %q)) {uid}}`, pred, val))
 	if err != nil {
-		return "", errors.Wrap(err, "could not query for file path")
+		return "", errors.Wrapf(err, "could not query for for %s %q", pred, val)
 	}
 
 	var data struct{ Q []struct{ UID string } }
@@ -132,48 +150,18 @@ func findFile(dg *dgo.Dgraph, path string) (string, error) {
 		Set: []*api.NQuad{
 			{
 				Subject:     "_:f",
-				Predicate:   "path",
-				ObjectValue: &api.Value{Val: &api.Value_StrVal{StrVal: path}},
+				Predicate:   pred,
+				ObjectValue: &api.Value{Val: &api.Value_StrVal{StrVal: val}},
 			},
-		},
-	})
-	if err != nil {
-		return "", errors.Wrap(err, "could not create new file")
-	}
-	return res.Uids["f"], nil
-}
-
-func findPackage(dg *dgo.Dgraph, id string) (string, error) {
-	ctx := context.Background()
-
-	txn := dg.NewTxn()
-	defer txn.Commit(ctx)
-
-	res, err := txn.Query(ctx, fmt.Sprintf(`{q(func: eq(id, %q)) {uid}}`, id))
-	if err != nil {
-		return "", errors.Wrap(err, "could not query for package id")
-	}
-
-	var data struct{ Q []struct{ UID string } }
-	if err := json.Unmarshal(res.GetJson(), &data); err != nil {
-		return "", errors.Wrap(err, "could not parse response")
-	}
-
-	if len(data.Q) > 0 {
-		return data.Q[0].UID, nil
-	}
-
-	res, err = txn.Mutate(ctx, &api.Mutation{
-		Set: []*api.NQuad{
 			{
 				Subject:     "_:f",
-				Predicate:   "path",
-				ObjectValue: &api.Value{Val: &api.Value_StrVal{StrVal: id}},
+				Predicate:   "dgraph.type",
+				ObjectValue: &api.Value{Val: &api.Value_StrVal{StrVal: typeName}},
 			},
 		},
 	})
 	if err != nil {
-		return "", errors.Wrap(err, "could not create new package")
+		return "", errors.Wrapf(err, "could not create new %s", pred)
 	}
 	return res.Uids["f"], nil
 }
