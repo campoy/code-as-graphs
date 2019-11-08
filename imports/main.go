@@ -48,7 +48,7 @@ func main() {
 			type Package {
 				id: string
 				imports: [Package]
-				<~imports>: [Pacakge]
+				<~imports>: [Package]
 			}
 		`,
 	}); err != nil {
