@@ -20,7 +20,7 @@ import (
 func main() {
 	flag.Parse()
 
-	cfg := &packages.Config{Mode: packages.NeedFiles | packages.NeedImports}
+	cfg := &packages.Config{Mode: packages.NeedImports}
 	pkgs, err := packages.Load(cfg, flag.Args()...)
 	if err != nil {
 		log.Fatalf("load: %v\n", err)
@@ -43,28 +43,18 @@ func main() {
 	if err := dg.Alter(ctx, &api.Operation{
 		Schema: `
 			<id>: string @index(exact) .
-			<go-files>: [uid] @reverse .
-			<path>: string @index(hash) .
 			<imports>: [uid] @reverse .
 
 			type Package {
 				id: string
 				imports: [Package]
 				<~imports>: [Pacakge]
-				go-files: [File]
-			}
-
-			type File {
-				path: string
-				<~go-files>: Package
 			}
 		`,
 	}); err != nil {
 		log.Fatal(err)
 	}
 
-	// Print the names of the source files
-	// for each package listed on the command line.
 	for _, pkg := range pkgs {
 		var nquads []*api.NQuad
 
@@ -83,18 +73,6 @@ func main() {
 				Val: &api.Value_StrVal{StrVal: "Package"},
 			},
 		})
-
-		for _, f := range pkg.GoFiles {
-			uid, err := upsert(dg, "path", f, "File")
-			if err != nil {
-				log.Fatalf("couldn't find file for %s: %v", f, err)
-			}
-			nquads = append(nquads, &api.NQuad{
-				Subject:   "uid(pkg)",
-				Predicate: "go-files",
-				ObjectId:  uid,
-			})
-		}
 
 		for _, pkg := range pkg.Imports {
 			uid, err := upsert(dg, "id", pkg.ID, "Package")

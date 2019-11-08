@@ -3,6 +3,7 @@ module github.com/campoy/code-as-graphs
 go 1.13
 
 require (
+	github.com/dgraph-io/dgo v1.0.0
 	github.com/dgraph-io/dgo/v2 v2.1.0
 	github.com/golang/protobuf v1.3.2
 	github.com/pkg/errors v0.8.1
