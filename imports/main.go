@@ -42,7 +42,7 @@ func main() {
 	ctx := context.Background()
 	if err := dg.Alter(ctx, &api.Operation{
 		Schema: `
-			<id>: string @index(exact) .
+			<id>: string @index(exact,trigram) .
 			<imports>: [uid] @reverse .
 
 			type Package {
